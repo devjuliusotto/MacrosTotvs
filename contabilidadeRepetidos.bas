@@ -6,63 +6,94 @@ Sub VerificaValoresImpares()
     Dim ultimaLinha As Long
     Dim i As Long
     
-    ' Ajustar o nome da planilha de origem:
+    ' Ajuste o nome da planilha de origem
     Set wsOrigem = ThisWorkbook.Sheets("NomeDaSuaPlanilha")
     
-    ' Verifica se já existe a planilha de destino “ValoresNaoRepetidos”.
-    ' Se existir, vamos limpá-la. Se não existir, criamos.
+    ' Verifica/Cria a planilha de destino “ValoresNaoRepetidos”
     On Error Resume Next
     Set wsDestino = ThisWorkbook.Sheets("ValoresNaoRepetidos")
     On Error GoTo 0
+    
     If wsDestino Is Nothing Then
         Set wsDestino = ThisWorkbook.Worksheets.Add
         wsDestino.Name = "ValoresNaoRepetidos"
     Else
-        ' Limpar conteúdo antigo, se for o caso
-        wsDestino.Cells.Clear
+        wsDestino.Cells.Clear ' Limpar conteúdo antigo toda vez que rodar
     End If
     
-    ' Encontrar a última linha preenchida na planilha de origem (coluna A como referência, por exemplo).
-    ' Ajuste conforme a sua estrutura.
+    ' Achar última linha usada (coluna A como base); ajuste conforme necessário
     ultimaLinha = wsOrigem.Cells(wsOrigem.Rows.Count, "A").End(xlUp).Row
     
-    ' Criar um dicionário para contar ocorrências
-    Dim dict As Object
-    Set dict = CreateObject("Scripting.Dictionary")
+    ' Criar dicionários para contagem das ocorrências em cada coluna (J e K)
+    Dim dictJ As Object, dictK As Object
+    Set dictJ = CreateObject("Scripting.Dictionary")
+    Set dictK = CreateObject("Scripting.Dictionary")
     
-    ' Primeiro loop: armazenar contagem das ocorrências de cada valor em J
-    For i = 2 To ultimaLinha ' assumindo cabeçalho na linha 1
-        Dim valor As Variant
-        valor = wsOrigem.Cells(i, "J").Value
+    Dim valorJ As Variant, valorK As Variant
+    
+    ' --- 1º loop: contar quantas vezes cada valor aparece em J e K ---
+    For i = 2 To ultimaLinha ' Pressupondo que a linha 1 é cabeçalho
+        valorJ = wsOrigem.Cells(i, "J").Value
+        valorK = wsOrigem.Cells(i, "K").Value
         
-        ' Se quiser ignorar células vazias, pode colocar If valor <> "" Then ...
-        If Not dict.Exists(valor) Then
-            dict.Add valor, 1
-        Else
-            dict(valor) = dict(valor) + 1
+        ' Se não estiver vazio em J, conta no dictJ
+        If Not IsEmpty(valorJ) And Trim(valorJ & "") <> "" Then
+            If Not dictJ.Exists(valorJ) Then
+                dictJ.Add valorJ, 1
+            Else
+                dictJ(valorJ) = dictJ(valorJ) + 1
+            End If
+        End If
+        
+        ' Se não estiver vazio em K, conta no dictK
+        If Not IsEmpty(valorK) And Trim(valorK & "") <> "" Then
+            If Not dictK.Exists(valorK) Then
+                dictK.Add valorK, 1
+            Else
+                dictK(valorK) = dictK(valorK) + 1
+            End If
         End If
     Next i
     
-    ' Agora vamos copiar o cabeçalho para a planilha de destino
+    ' Copiar o cabeçalho para a planilha de destino (opcional)
     wsOrigem.Rows(1).Copy Destination:=wsDestino.Rows(1)
     
     Dim linhaDestino As Long
     linhaDestino = 2
     
-    ' Segundo loop: para cada linha, verificar se a contagem do valor em J é ímpar
+    ' --- 2º loop: copiar linhas com ocorrência ímpar em J OU K ---
     For i = 2 To ultimaLinha
-        Dim valAtual As Variant
-        valAtual = wsOrigem.Cells(i, "J").Value
+        valorJ = wsOrigem.Cells(i, "J").Value
+        valorK = wsOrigem.Cells(i, "K").Value
         
-        If dict(valAtual) Mod 2 <> 0 Then
-            ' Se for ímpar, copiamos a linha inteira para a aba de destino
+        Dim jImpar As Boolean, kImpar As Boolean
+        jImpar = False
+        kImpar = False
+        
+        ' Verifica se J não é vazio e se está ímpar
+        If Not IsEmpty(valorJ) And Trim(valorJ & "") <> "" Then
+            If dictJ(valorJ) Mod 2 <> 0 Then
+                jImpar = True
+            End If
+        End If
+        
+        ' Verifica se K não é vazio e se está ímpar
+        If Not IsEmpty(valorK) And Trim(valorK & "") <> "" Then
+            If dictK(valorK) Mod 2 <> 0 Then
+                kImpar = True
+            End If
+        End If
+        
+        ' Se J for ímpar OU K for ímpar, copia a linha
+        If jImpar Or kImpar Then
             wsOrigem.Rows(i).Copy wsDestino.Rows(linhaDestino)
             linhaDestino = linhaDestino + 1
         End If
+        
     Next i
     
-    ' Opcional: ajustar colunas na planilha de destino
+    ' Ajuste de colunas (opcional)
     wsDestino.Columns.AutoFit
     
-    MsgBox "Análise concluída. Linhas com valores ímpares de ocorrência foram copiadas para 'ValoresNaoRepetidos'."
+    MsgBox "Análise concluída! Linhas com valores de ocorrência ímpar (J ou K) foram copiadas para 'ValoresNaoRepetidos'.", vbInformation
 End Sub
