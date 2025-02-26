@@ -1,0 +1,295 @@
+Sub GeraRascunho()
+
+    Dim wsCroqui As Worksheet
+    Dim wsRascunho As Worksheet
+    Dim wsErros As Worksheet
+    
+    Dim lr As Long ' última linha preenchida em Croqui
+    Dim i As Long
+    Dim rng As Range, cell As Range
+    Dim dict As Object
+    Dim key As Variant
+    Dim rowIndex As Long
+    
+    '=== 1) Verifica se aba "Rascunho" já existe e deleta ===
+    On Error Resume Next
+    Application.DisplayAlerts = False
+    Worksheets("Rascunho").Delete
+    Application.DisplayAlerts = True
+    On Error GoTo 0
+    
+    '=== 2) Cria aba "Rascunho" ===
+    Set wsCroqui = Worksheets("Croqui")
+    Set wsRascunho = Worksheets.Add
+    wsRascunho.Name = "Rascunho"
+    
+    '=== 2.1) Verifica/Cria aba "Erros" e limpa conteúdo anterior ===
+    On Error Resume Next
+    Set wsErros = Worksheets("Erros")
+    On Error GoTo 0
+    
+    If wsErros Is Nothing Then
+        Set wsErros = Worksheets.Add
+        wsErros.Name = "Erros"
+    Else
+        wsErros.Cells.Clear ' Apaga todos os dados antigos
+    End If
+    
+    ' Copia o cabeçalho da aba Croqui (linha 1) para a aba Erros (linha 1)
+    wsCroqui.Rows(1).Copy Destination:=wsErros.Rows(1)
+    
+    '=== 3) Apaga as linhas em que a coluna I está vazia na aba "Croqui" ===
+    lr = wsCroqui.Cells(wsCroqui.Rows.Count, "I").End(xlUp).Row
+    
+    ' Percorre de baixo para cima para evitar problemas ao deletar
+    For i = lr To 2 Step -1
+        If IsEmpty(wsCroqui.Cells(i, "I")) Or wsCroqui.Cells(i, "I").Value = "" Then
+            wsCroqui.Rows(i).Delete
+        End If
+    Next i
+    
+    ' Reajusta lr caso tenha deletado linhas
+    lr = wsCroqui.Cells(wsCroqui.Rows.Count, "I").End(xlUp).Row
+    
+    '--------------------------------------------------------------------------------
+    ' 3.1) Converte texto da coluna I em número e aplica formato financeiro
+    '--------------------------------------------------------------------------------
+    Dim tmp As String
+    For i = 2 To lr
+        If Not IsEmpty(wsCroqui.Cells(i, "I")) Then
+            tmp = wsCroqui.Cells(i, "I").Value2
+            If IsNumeric(tmp) Then
+                wsCroqui.Cells(i, "I").Value = CDbl(tmp)
+            End If
+        End If
+    Next i
+    
+    ' Aplica o formato contábil (ajustado para exibir "R$")
+    wsCroqui.Range("I2:I" & lr).NumberFormat = "$ #,##0.00"
+    '--------------------------------------------------------------------------------
+    
+    '=== 4) Coletar valores distintos da coluna I e suas quantidades ===
+    Set dict = CreateObject("Scripting.Dictionary")
+    Set rng = wsCroqui.Range("I2:I" & lr)
+    
+    For Each cell In rng
+        If Not dict.Exists(cell.Value) Then
+            dict.Add cell.Value, 1
+        Else
+            dict(cell.Value) = dict(cell.Value) + 1
+        End If
+    Next cell
+    
+    '=== 5) Inserir valores distintos na aba "Rascunho" (col A) e as quantidades (col B) ===
+    wsRascunho.Range("A1").Value = "Valor"
+    wsRascunho.Range("B1").Value = "Quantidade"
+    
+    rowIndex = 2
+    For Each key In dict.Keys
+        ' Valor (em formato numérico)
+        wsRascunho.Cells(rowIndex, 1).Value = key
+        
+        ' Aplique o mesmo formato contábil
+        wsRascunho.Cells(rowIndex, 1).NumberFormat = wsCroqui.Range("I2").NumberFormat
+        
+        ' Quantidade
+        wsRascunho.Cells(rowIndex, 2).Value = dict(key)
+        
+        rowIndex = rowIndex + 1
+    Next key
+    
+    '=== 6) Formatar a faixa como Tabela na aba "Rascunho" ===
+    Dim lastRow As Long
+    lastRow = wsRascunho.Cells(wsRascunho.Rows.Count, "A").End(xlUp).Row
+    
+    Dim tblRange As Range
+    Set tblRange = wsRascunho.Range("A1:B" & lastRow)
+    
+    Dim tblObj As ListObject
+    Set tblObj = wsRascunho.ListObjects.Add( _
+                    SourceType:=xlSrcRange, _
+                    Source:=tblRange, _
+                    XlListObjectHasHeaders:=xlYes)
+                    
+    tblObj.Name = "tblRascunho"
+    'tblObj.TableStyle = "TableStyleLight9" ' Estilo de tabela (opcional)
+    
+    '=== 7) Filtrar os valores pela coluna B, de 1 em 1, e dentro de cada filtro,
+    '       criar um loop que pinta as células na aba "Croqui" (coluna I)
+    '       que correspondem ao valor filtrado.
+    '
+    '       -> Se a col K=1 (lógica anterior), copiamos a linha p/ Erros.
+    '       -> Se a col K=2 (ou mais linhas), analisamos de 2 em 2.
+    '          Para cada PAR de linhas:
+    '             (1) Se col J (Crédito/Débito) for diferente -> copiar
+    '             (2) Se col L (Financeiro/Contabilidade) não for cruzado -> copiar
+    '==================================================================
+    
+    Dim maxVal As Long
+    maxVal = Application.WorksheetFunction.Max(wsRascunho.Range("B2:B" & lastRow))
+    
+    Dim cLoop As Long
+    Dim rngVisible As Range
+    Dim cell2 As Range
+    
+    For cLoop = 1 To maxVal
+        
+        ' Aplica o filtro na coluna 2 (Quantidade) da tabela
+        tblObj.Range.AutoFilter Field:=2, Criteria1:=cLoop
+        
+        ' Localiza as células visíveis na coluna A (coluna 1) depois do filtro
+        On Error Resume Next
+        Set rngVisible = tblObj.Range.Columns(1).SpecialCells(xlCellTypeVisible)
+        On Error GoTo 0
+        
+        If Not rngVisible Is Nothing Then
+            
+            Dim valorFiltro As String
+            Dim rngCroqui As Range
+            Dim cellCroqui As Range
+            
+            ' Para cada valor visível na coluna A (Valor) da tabela Rascunho
+            For Each cell2 In rngVisible
+                ' Ignora a linha de cabeçalho da tabela
+                If cell2.Row > tblObj.HeaderRowRange.Row Then
+                    
+                    ' Valor que será usado para filtrar na aba "Croqui"
+                    valorFiltro = cell2.Text
+                    
+                    ' Remover qualquer filtro anterior em "Croqui"
+                    wsCroqui.AutoFilterMode = False
+                    
+                    ' Filtro na coluna I (Field=9) usando valorFiltro
+                    wsCroqui.UsedRange.AutoFilter Field:=9, Criteria1:=valorFiltro
+                    
+                    ' Obtem as células visíveis na coluna I, excluindo cabeçalho
+                    Set rngCroqui = wsCroqui.Range("I1", _
+                        wsCroqui.Cells(wsCroqui.Rows.Count, "I").End(xlUp))
+                    
+                    On Error Resume Next
+                    Set rngCroqui = rngCroqui.SpecialCells(xlCellTypeVisible)
+                    On Error GoTo 0
+                    
+                    If Not rngCroqui Is Nothing Then
+                        
+                        ' --- (A) Pintar as células visíveis da col I (exceto cabeçalho)
+                        For Each cellCroqui In rngCroqui
+                            If cellCroqui.Row > 1 Then
+                                cellCroqui.Interior.Color = vbRed
+                            End If
+                        Next cellCroqui
+                        
+                        ' --- (B) Analisar as colunas J, K e L
+                        Dim lr2 As Long
+                        lr2 = wsCroqui.Cells(wsCroqui.Rows.Count, "A").End(xlUp).Row
+                        
+                        Dim rngAllVis As Range
+                        On Error Resume Next
+                        ' Pegamos a coluna A só para listar as linhas visíveis
+                        Set rngAllVis = wsCroqui.Range("A2:A" & lr2).SpecialCells(xlCellTypeVisible)
+                        On Error GoTo 0
+                        
+                        If Not rngAllVis Is Nothing Then
+                            
+                            ' (1) Lógica para K=1 (se você quiser manter).
+                            Dim cellVis As Range
+                            For Each cellVis In rngAllVis
+                                If wsCroqui.Cells(cellVis.Row, "K").Value = 1 Then
+                                    Dim nextRowErr As Long
+                                    nextRowErr = wsErros.Cells(wsErros.Rows.Count, 1).End(xlUp).Row + 1
+                                    wsCroqui.Rows(cellVis.Row).Copy wsErros.Rows(nextRowErr)
+                                End If
+                            Next cellVis
+                            
+                            ' (2) Lógica para K=2 -> Analisar de 2 em 2
+                            '     Se existirem 2, 4, 6... linhas c/ K=2, vamos analisar em pares.
+                            Dim rowsK2 As New Collection
+                            For Each cellVis In rngAllVis
+                                If wsCroqui.Cells(cellVis.Row, "K").Value = 2 Then
+                                    rowsK2.Add cellVis.Row
+                                End If
+                            Next cellVis
+                            
+                            If rowsK2.Count >= 2 Then
+                                Dim iPair As Long
+                                For iPair = 1 To rowsK2.Count Step 2
+                                    ' Confere se temos um "par" completo
+                                    If iPair + 1 <= rowsK2.Count Then
+                                        Dim row1 As Long, row2 As Long
+                                        row1 = rowsK2(iPair)
+                                        row2 = rowsK2(iPair + 1)
+                                        
+                                        Dim valJ1 As Variant, valJ2 As Variant
+                                        Dim valL1 As Variant, valL2 As Variant
+                                        
+                                        valJ1 = wsCroqui.Cells(row1, "J").Value
+                                        valJ2 = wsCroqui.Cells(row2, "J").Value
+                                        
+                                        valL1 = wsCroqui.Cells(row1, "L").Value
+                                        valL2 = wsCroqui.Cells(row2, "L").Value
+                                        
+                                        ' Verificar se J são iguais
+                                        Dim jOk As Boolean
+                                        jOk = (StrComp(valJ1, valJ2, vbTextCompare) = 0)
+                                        
+                                        ' Verificar se L é Financeiro x Contabilidade (cruzado)
+                                        Dim lOk As Boolean
+                                        Dim mod1 As String, mod2 As String
+                                        mod1 = LCase(valL1)
+                                        mod2 = LCase(valL2)
+                                        
+                                        If (mod1 = "financeiro" And mod2 = "contabilidade") Or _
+                                           (mod1 = "contabilidade" And mod2 = "financeiro") Then
+                                            lOk = True
+                                        Else
+                                            lOk = False
+                                        End If
+                                        
+                                        ' Se qualquer condição falhar, copiamos as 2 linhas p/ Erros
+                                        If Not (jOk And lOk) Then
+                                            Dim nr As Long
+                                            nr = wsErros.Cells(wsErros.Rows.Count, 1).End(xlUp).Row + 1
+                                            wsCroqui.Rows(row1).Copy wsErros.Rows(nr)
+                                            wsCroqui.Rows(row2).Copy wsErros.Rows(nr + 1)
+                                        End If
+                                    
+                                    Else
+                                        ' Se sobrou 1 linha sem par (número ímpar de linhas K=2)
+                                        ' Decida o que fazer: ignorar, copiar sozinha para "Erros", etc.
+                                        '
+                                        ' Exemplo: copiar sozinha:
+                                        'Dim leftoverRow As Long
+                                        'leftoverRow = rowsK2(iPair)
+                                        'Dim nr2 As Long
+                                        'nr2 = wsErros.Cells(wsErros.Rows.Count, 1).End(xlUp).Row + 1
+                                        'wsCroqui.Rows(leftoverRow).Copy wsErros.Rows(nr2)
+                                        
+                                    End If
+                                Next iPair
+                            End If
+                            
+                        End If
+                        
+                    End If
+                    
+                    ' Remove o filtro na aba "Croqui" antes de passar para o próximo valor
+                    wsCroqui.AutoFilterMode = False
+                End If
+            Next cell2
+        End If
+    Next cLoop
+    
+    ' Tira o filtro no final da tabela Rascunho
+    On Error Resume Next
+    tblObj.AutoFilter.ShowAllData
+    On Error GoTo 0
+    
+        Worksheets("Geral").Select
+    
+   ' MsgBox "Processo concluído!", vbInformation
+    
+
+
+End Sub
+
+
